@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>top-down • wanderer</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    body {
+      background: #1a1e2c;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      touch-action: pan-x pan-y; 
+      padding: 8px;
+    }
+    .game-wrapper {
+      background: #0e121b;
+      border-radius: 2rem;
+      padding: 12px;
+      box-shadow: 0 20px 35px -8px rgba(0, 0, 0, 0.8), inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+      max-width: 560px;
+      aspect-ratio: 1 / 1;
+      border-radius: 1.2rem;
+      box-shadow: 0 0 0 2px #2a3142, 0 18px 30px -10px black;
+      background: #131a24;
+      touch-action: none;  /* prevent scroll/pinch on canvas */
+      cursor: default;
+    }
+    .mobile-controls {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 14px;
+      padding: 0 8px;
+      gap: 20px;
+    }
+    .dpad {
+      display: flex;
+      gap: 10px;
+    }
+    .dpad-btn {
+      width: 68px;
+      height: 68px;
+      background: #262e3e;
+      border-radius: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2.2rem;
+      font-weight: 700;
+      color: #d7e2f0;
+      box-shadow: 0 5px 0 #0b0f16, 0 8px 12px rgba(0,0,0,0.6);
+      transition: all 0.05s ease;
+      border: 1px solid #3f4a5e;
+      touch-action: manipulation;
+      cursor: pointer;
+    }
+    .dpad-btn:active {
+      transform: translateY(4px);
+      box-shadow: 0 1px 0 #0b0f16, 0 5px 10px black;
+      background: #303a4c;
+    }
+    .right-buttons {
+      display: flex;
+      gap: 18px;
+      align-items: center;
+    }
+    .action-btn {
+      width: 74px;
+      height: 74px;
+      background: #2e3b4e;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.2rem;
+      font-weight: 600;
+      color: #bbd0e9;
+      box-shadow: 0 5px 0 #10161f, 0 8px 12px black;
+      border: 1px solid #4e5f78;
+      transition: all 0.05s ease;
+      touch-action: manipulation;
+      cursor: pointer;
+      letter-spacing: 0.5px;
+    }
+    .action-btn:active {
+      transform: translateY(4px);
+      box-shadow: 0 1px 0 #10161f, 0 5px 10px black;
+      background: #3b4a62;
+    }
+    .hint {
+      text-align: center;
+      color: #899bb2;
+      font-size: 0.8rem;
+      margin-top: 10px;
+      letter-spacing: 0.4px;
+      font-weight: 400;
+    }
+    @media (max-width: 500px) {
+      .dpad-btn { width: 58px; height: 58px; font-size: 1.9rem; border-radius: 16px; }
+      .action-btn { width: 64px; height: 64px; font-size: 1rem; }
+      .game-wrapper { padding: 8px; border-radius: 1.5rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="game-wrapper">
+    <canvas id="gameCanvas" width="560" height="560"></canvas>
+    <div class="mobile-controls">
+      <div class="dpad">
+        <div class="dpad-btn" id="btnUp">▲</div>
+        <div class="dpad-btn" id="btnDown">▼</div>
+        <div class="dpad-btn" id="btnLeft">◀</div>
+        <div class="dpad-btn" id="btnRight">▶</div>
+      </div>
+      <div class="right-buttons">
+        <div class="action-btn" id="btnDash">DASH</div>
+      </div>
+    </div>
+    <div class="hint">WASD / arrows / buttons · hold DASH for speed</div>
+  </div>
+  <script>
+    (function() {
+      const canvas = document.getElementById('gameCanvas');
+      const ctx = canvas.getContext('2d');
+
+      // ---------- FIXED DIMENSIONS ----------
+      const SIZE = 560;          // logical canvas size
+      canvas.width = SIZE;
+      canvas.height = SIZE;
+
+      // ---------- GAME STATE ----------
+      // Player position (center start)
+      let player = {
+        x: SIZE / 2,
+        y: SIZE / 2,
+        radius: 18,
+        speed: 3.8,
+      };
+
+      // Input flags (keyboard + touch)
+      const keys = {
+        w: false, a: false, s: false, d: false,
+        up: false, down: false, left: false, right: false,
+      };
+      // Dash flag (for touch button and Shift key)
+      let dashPressed = false;
+
+      // Touch / button override flags (to release them properly)
+      // We'll use the same keys object, but set/reset via button events.
+      // We also support physical shift for dash.
+
+      // ----- bounds for player (with soft margin) -----
+      const BOUNDARY = 20; // keeps player inside visible area
+
+      // ----- enemy / creature (just for show, moves slowly) -----
+      let creature = {
+        x: 180,
+        y: 160,
+        radius: 22,
+        baseSpeed: 0.9,
+        angle: 0,
+        color: '#d46b6b',
+      };
+      // small collectible stars? No, but we add a few floating dots.
+      let dots = [];
+      for (let i = 0; i < 18; i++) {
+        dots.push({
+          x: 40 + Math.random() * (SIZE - 80),
+          y: 40 + Math.random() * (SIZE - 80),
+          r: 2 + Math.random() * 4,
+          phase: Math.random() * Math.PI * 2,
+        });
+      }
+
+      // ---------- HELPER: clear/reset touch flags ----------
+      function resetDirectionalInput() {
+        keys.w = keys.a = keys.s = keys.d = false;
+        keys.up = keys.down = keys.left = keys.right = false;
+      }
+
+      // ---------- KEYBOARD HANDLING ----------
+      function handleKeyDown(e) {
+        const key = e.key;
+        // Prevent arrow keys / space from scrolling page
+        if (key === 'ArrowUp' || key === 'ArrowDown' || key === 'ArrowLeft' || key === 'ArrowRight' || key === ' ') {
+          e.preventDefault();
+        }
+        // WASD
+        if (key === 'w' || key === 'W') keys.w = true;
+        if (key === 'a' || key === 'A') keys.a = true;
+        if (key === 's' || key === 'S') keys.s = true;
+        if (key === 'd' || key === 'D') keys.d = true;
+        // Arrows
+        if (key === 'ArrowUp') keys.up = true;
+        if (key === 'ArrowDown') keys.down = true;
+        if (key === 'ArrowLeft') keys.left = true;
+        if (key === 'ArrowRight') keys.right = true;
+        // Dash (shift or space)
+        if (key === 'Shift' || key === ' ') {
+          dashPressed = true;
+          e.preventDefault();
+        }
+      }
+
+      function handleKeyUp(e) {
+        const key = e.key;
+        if (key === 'w' || key === 'W') keys.w = false;
+        if (key === 'a' || key === 'A') keys.a = false;
+        if (key === 's' || key === 'S') keys.s = false;
+        if (key === 'd' || key === 'D') keys.d = false;
+        if (key === 'ArrowUp') keys.up = false;
+        if (key === 'ArrowDown') keys.down = false;
+        if (key === 'ArrowLeft') keys.left = false;
+        if (key === 'ArrowRight') keys.right = false;
+        if (key === 'Shift' || key === ' ') {
+          dashPressed = false;
+          if (key === ' ') e.preventDefault();
+        }
+      }
+
+      // Prevent context menu, etc.
+      window.addEventListener('keydown', handleKeyDown);
+      window.addEventListener('keyup', handleKeyUp);
+
+      // ---------- TOUCH / BUTTON BINDINGS (mobile) ----------
+      // Helper to attach press/release with pointer events (works on mobile+desktop)
+      function bindDirectionalButton(elementId, keyProp) {
+        const el = document.getElementById(elementId);
+        if (!el) return;
+
+        const press = (e) => {
+          e.preventDefault();
+          keys[keyProp] = true;
+          // for arrows, also set equivalent? but we keep separate.
+          // we'll combine later in movement.
+        };
+        const release = (e) => {
+          e.preventDefault();
+          keys[keyProp] = false;
+        };
+
+        el.addEventListener('mousedown', press);
+        el.addEventListener('mouseup', release);
+        el.addEventListener('mouseleave', release);
+        el.addEventListener('touchstart', press, { passive: false });
+        el.addEventListener('touchend', release);
+        el.addEventListener('touchcancel', release);
+        // Prevent double-tap zoom etc.
+        el.addEventListener('contextmenu', (e) => e.preventDefault());
+      }
+
+      // directional buttons
+      bindDirectionalButton('btnUp', 'up');
+      bindDirectionalButton('btnDown', 'down');
+      bindDirectionalButton('btnLeft', 'left');
+      bindDirectionalButton('btnRight', 'right');
+
+      // dash button
+      const dashBtn = document.getElementById('btnDash');
+      const dashPress = (e) => {
+        e.preventDefault();
+        dashPressed = true;
+      };
+      const dashRelease = (e) => {
+        e.preventDefault();
+        dashPressed = false;
+      };
+      dashBtn.addEventListener('mousedown', dashPress);
+      dashBtn.addEventListener('mouseup', dashRelease);
+      dashBtn.addEventListener('mouseleave', dashRelease);
+      dashBtn.addEventListener('touchstart', dashPress, { passive: false });
+      dashBtn.addEventListener('touchend', dashRelease);
+      dashBtn.addEventListener('touchcancel', dashRelease);
+      dashBtn.addEventListener('contextmenu', (e) => e.preventDefault());
+
+      // Also clear stuck keys if window loses focus
+      window.addEventListener('blur', () => {
+        resetDirectionalInput();
+        dashPressed = false;
+      });
+
+      // ---------- MOVEMENT LOGIC ----------
+      function updatePlayer() {
+        // combine keyboard + arrows + touch (all directions)
+        let moveX = 0;
+        let moveY = 0;
+
+        // WASD
+        if (keys.w) moveY -= 1;
+        if (keys.s) moveY += 1;
+        if (keys.a) moveX -= 1;
+        if (keys.d) moveX += 1;
+
+        // Arrow keys / on-screen directional buttons (up/down/left/right)
+        if (keys.up) moveY -= 1;
+        if (keys.down) moveY += 1;
+        if (keys.left) moveX -= 1;
+        if (keys.right) moveX += 1;
+
+        // normalize diagonal
+        if (moveX !== 0 || moveY !== 0) {
+          const len = Math.hypot(moveX, moveY);
+          moveX /= len;
+          moveY /= len;
+        }
+
+        // Speed: dash if dashPressed (Shift, Space, or DASH button)
+        const currentSpeed = dashPressed ? player.speed * 2.4 : player.speed;
+
+        // Apply movement
+        player.x += moveX * currentSpeed;
+        player.y += moveY * currentSpeed;
+
+        // ---- boundaries (with radius) ----
+        const minX = player.radius + 6;
+        const maxX = SIZE - player.radius - 6;
+        const minY = player.radius + 6;
+        const maxY = SIZE - player.radius - 6;
+
+        if (player.x < minX) player.x = minX;
+        if (player.x > maxX) player.x = maxX;
+        if (player.y < minY) player.y = minY;
+        if (player.y > maxY) player.y = maxY;
+
+        // ----- creature simple wandering (looks alive) -----
+        creature.angle += 0.008;
+        creature.x = SIZE/2 + Math.sin(creature.angle * 0.7) * 160 + Math.cos(creature.angle * 0.3) * 40;
+        creature.y = SIZE/2 + Math.cos(creature.angle * 0.9) * 120 + Math.sin(creature.angle * 0.5) * 50;
+        // keep inside
+        creature.x = Math.min(Math.max(creature.x, 50), SIZE-50);
+        creature.y = Math.min(Math.max(creature.y, 50), SIZE-50);
+      }
+
+      // ---------- DRAWING ----------
+      function draw() {
+        ctx.clearRect(0, 0, SIZE, SIZE);
+
+        // --- background grid / subtle pattern ---
+        ctx.fillStyle = '#131f2b';
+        ctx.fillRect(0, 0, SIZE, SIZE);
+
+        // grid lines
+        ctx.strokeStyle = '#26323f';
+        ctx.lineWidth = 1.2;
+        const step = 40;
+        for (let i = 0; i <= SIZE; i += step) {
+          ctx.beginPath();
+          ctx.moveTo(i, 0);
+          ctx.lineTo(i, SIZE);
+          ctx.strokeStyle = '#26323f';
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(0, i);
+          ctx.lineTo(SIZE, i);
+          ctx.stroke();
+        }
+
+        // --- floating glowing dots (ambient) ---
+        dots.forEach((dot, idx) => {
+          const pulse = Math.sin(Date.now() * 0.002 + dot.phase) * 1.5 + 2.2;
+          ctx.beginPath();
+          ctx.arc(dot.x, dot.y, dot.r * 1.2, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(160, 210, 255, ${0.2 + pulse * 0.06})`;
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(dot.x, dot.y, dot.r * 0.7, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(220, 240, 255, ${0.5 + pulse * 0.1})`;
+          ctx.fill();
+        });
+
+        // --- creature (friendly wandering orb) ---
+        ctx.shadowColor = '#b33e3e';
+        ctx.shadowBlur = 18;
+        ctx.beginPath();
+        ctx.arc(creature.x, creature.y, creature.radius, 0, Math.PI * 2);
+        ctx.fillStyle = '#b84b4b';
+        ctx.fill();
+        // inner glow
+        ctx.shadowBlur = 10;
+        ctx.beginPath();
+        ctx.arc(creature.x - 4, creature.y - 4, creature.radius * 0.6, 0, Math.PI * 2);
+        ctx.fillStyle = '#e07878';
+        ctx.fill();
+        // eyes
+        ctx.shadowBlur = 0;
+        ctx.beginPath();
+        ctx.arc(creature.x - 7, creature.y - 6, 4.5, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(creature.x + 7, creature.y - 6, 4.5, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(creature.x - 9, creature.y - 8, 2, 0, Math.PI * 2);
+        ctx.fillStyle = '#1e1e2a';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(creature.x + 5, creature.y - 8, 2, 0, Math.PI * 2);
+        ctx.fillStyle = '#1e1e2a';
+        ctx.fill();
+
+        // --- player (main character) ---
+        // glow
+        ctx.shadowColor = '#6ec8ff';
+        ctx.shadowBlur = dashPressed ? 38 : 22;
+
+        // outer ring (dash indicator)
+        if (dashPressed) {
+          ctx.beginPath();
+          ctx.arc(player.x, player.y, player.radius + 8, 0, Math.PI * 2);
+          ctx.strokeStyle = '#ffe484';
+          ctx.lineWidth = 4;
+          ctx.stroke();
+        }
+
+        // player body
+        ctx.beginPath();
+        ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+        ctx.fillStyle = '#3d9eff';
+        ctx.fill();
+        // gradient effect
+        ctx.shadowBlur = 14;
+        ctx.beginPath();
+        ctx.arc(player.x - 4, player.y - 4, player.radius * 0.7, 0, Math.PI * 2);
+        ctx.fillStyle = '#9ad0ff';
+        ctx.fill();
+
+        // eyes (simple)
+        ctx.shadowBlur = 0;
+        ctx.beginPath();
+        ctx.arc(player.x - 7, player.y - 6, 4, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(player.x + 7, player.y - 6, 4, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(player.x - 9, player.y - 8, 1.8, 0, Math.PI * 2);
+        ctx.fillStyle = '#122b44';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(player.x + 5, player.y - 8, 1.8, 0, Math.PI * 2);
+        ctx.fillStyle = '#122b44';
+        ctx.fill();
+
+        // small smile
+        ctx.beginPath();
+        ctx.arc(player.x, player.y + 3, 6, 0.1, Math.PI - 0.1);
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // reset shadow
+        ctx.shadowBlur = 0;
+
+        // draw dash cooldown / text indicator (small)
+        if (dashPressed) {
+          ctx.font = 'bold 18px "Segoe UI", system-ui, sans-serif';
+          ctx.fillStyle = '#fff2c0';
+          ctx.shadowBlur = 14;
+          ctx.shadowColor = '#ffb347';
+          ctx.fillText('⚡', player.x + 24, player.y - 24);
+          ctx.shadowBlur = 0;
+        }
+      }
+
+      // ---------- GAME LOOP ----------
+      function gameLoop() {
+        updatePlayer();
+        draw();
+        requestAnimationFrame(gameLoop);
+      }
+
+      // start the loop
+      gameLoop();
+
+      // Also handle canvas resize / prevent touch gestures on canvas
+      canvas.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+      canvas.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+      canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+      // ensure that if the user releases outside the buttons, keys get stuck? we have window blur handler.
+      // Also add global mouseup/touchend to reset directionals if they were triggered? not needed because
+      // button-specific listeners release. but we handle global to avoid stuck dash if mouse leaves window.
+      window.addEventListener('mouseup', (e) => {
+        // no automatic reset, but dash might stick if mouseup outside dash button? we handle mouseleave.
+      });
+    })();
+  </script>
+</body>
+</html>
