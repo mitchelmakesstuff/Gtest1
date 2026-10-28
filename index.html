@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Project 2 - Stage 1</title>
+  <style>
+    * { box-sizing: border-box; user-select: none; }
+    body {
+      margin: 0;
+      background: #111;
+      color: #ccc;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: monospace;
+      touch-action: none;
+    }
+    #game-container {
+      position: relative;
+      width: 100%;
+      max-width: 500px;
+      aspect-ratio: 1/1;
+      background: #000;
+      box-shadow: 0 0 20px rgba(0,0,0,0.8);
+    }
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      image-rendering: pixelated; /* The magic pixel art line */
+    }
+    #ui {
+      width: 100%;
+      max-width: 500px;
+      display: flex;
+      justify-content: space-between;
+      padding: 10px;
+      font-size: 14px;
+      font-weight: bold;
+      color: #fff;
+      background: #222;
+    }
+    #controls {
+      width: 100%;
+      max-width: 500px;
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 5px;
+      padding: 10px;
+      background: #1a1a1a;
+    }
+    button {
+      padding: 15px;
+      font-size: 18px;
+      font-weight: bold;
+      background: #333;
+      color: #fff;
+      border: 1px solid #555;
+      border-radius: 5px;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+    button:active { background: #555; }
+    .empty { visibility: hidden; }
+    #message {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0,0,0,0.85);
+      padding: 20px;
+      border: 2px solid #fff;
+      text-align: center;
+      display: none;
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="ui">
+    <div>HP: <span id="hp">10</span></div>
+    <div>ATK: <span id="atk">1</span></div>
+    <div>FLOOR 1</div>
+  </div>
+
+  <div id="game-container">
+    <canvas id="gameCanvas" width="320" height="320"></canvas>
+    <div id="message">
+      <h2 id="msg-title" style="margin:0 0 10px 0;">You Died</h2>
+      <button onclick="restartGame()" style="padding: 10px 20px; margin-top: 10px;">Restart</button>
+    </div>
+  </div>
+
+  <div id="controls">
+    <button class="empty"></button>
+    <button onclick="doTurn(0, -1)">▲</button>
+    <button class="empty"></button>
+    <button onclick="doTurn(-1, 0)">◀</button>
+    <button onclick="doTurn(0, 1)">▼</button>
+    <button onclick="doTurn(1, 0)">▶</button>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    // Grid Settings (20x20 grid, 16px tiles = 320x320 canvas)
+    const TILE_SIZE = 16;
+    const MAP_SIZE = 20;
+
+    // Game State
+    let player = { x: 2, y: 2, hp: 10, maxHp: 10, atk: 1 };
+    let enemy = { x: 10, y: 10, hp: 5, atk: 2, alive: true };
+    let loot = { x: 15, y: 15, active: true };
+    let exit = { x: 17, y: 2 };
+    let walls = [];
+    let gameState = 'PLAYING'; // PLAYING, DEAD, WIN
+
+    // Generate simple walls (border + some obstacles)
+    function generateMap() {
+      walls = [];
+      for (let y = 0; y < MAP_SIZE; y++) {
+        for (let x = 0; x < MAP_SIZE; x++) {
+          if (x === 0 || y === 0 || x === MAP_SIZE - 1 || y === MAP_SIZE - 1) {
+            walls.push({x, y});
+          } else if (x > 5 && x < 8 && y > 5 && y < 15) {
+            walls.push({x, y}); // A simple pillar
+          }
+        }
+      }
+    }
+
+    function isWall(x, y) {
+      return walls.some(w => w.x === x && w.y === y);
+    }
+
+    // DRAWING
+    function draw() {
+      ctx.fillStyle = '#111'; // Floor
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Draw Walls
+      ctx.fillStyle = '#444';
+      walls.forEach(w => ctx.fillRect(w.x * TILE_SIZE, w.y * TILE_SIZE, TILE_SIZE, TILE_SIZE));
+
+      // Draw Exit
+      ctx.fillStyle = '#00aaff'; // Portal blue
+      ctx.fillRect(exit.x * TILE_SIZE, exit.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+
+      // Draw Loot
+      if (loot.active) {
+        ctx.fillStyle = '#ffcc00'; // Gold
+        ctx.fillRect(loot.x * TILE_SIZE + 4, loot.y * TILE_SIZE + 4, 8, 8);
+      }
+
+      // Draw Enemy
+      if (enemy.alive) {
+        ctx.fillStyle = '#ff3333'; // Red
+        ctx.fillRect(enemy.x * TILE_SIZE, enemy.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+        // Enemy HP bar
+        ctx.fillStyle = '#000';
+        ctx.fillRect(enemy.x * TILE_SIZE, enemy.y * TILE_SIZE - 4, TILE_SIZE, 3);
+        ctx.fillStyle = '#0f0';
+        ctx.fillRect(enemy.x * TILE_SIZE, enemy.y * TILE_SIZE - 4, (enemy.hp / 5) * TILE_SIZE, 3);
+      }
+
+      // Draw Player
+      ctx.fillStyle = '#00ff00'; // Green
+      ctx.fillRect(player.x * TILE_SIZE, player.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+
+      updateUI();
+    }
+
+    function updateUI() {
+      document.getElementById('hp').innerText = player.hp;
+      document.getElementById('atk').innerText = player.atk;
+    }
+
+    // LOGIC
+    function doTurn(dx, dy) {
+      if (gameState !== 'PLAYING') return;
+
+      let targetX = player.x + dx;
+      let targetY = player.y + dy;
+
+      // 1. Check Walls
+      if (isWall(targetX, targetY)) return; // Blocked by wall, turn is wasted? No, just don't move.
+
+      // 2. Check Enemy (Attack)
+      if (enemy.alive && targetX === enemy.x && targetY === enemy.y) {
+        enemy.hp -= player.atk;
+        if (enemy.hp <= 0) enemy.alive = false;
+        endTurn(); 
+        return;
+      }
+
+      // 3. Check Exit (Win)
+      if (targetX === exit.x && targetY === exit.y) {
+        gameState = 'WIN';
+        showMessage("You Escaped!");
+        return;
+      }
+
+      // 4. Move Player
+      player.x = targetX;
+      player.y = targetY;
+
+      // 5. Check Loot
+      if (loot.active && player.x === loot.x && player.y === loot.y) {
+        player.atk += 1;
+        loot.active = false;
+        // Don't end turn here, let the enemy move, getting loot takes a turn.
+      }
+
+      // 6. End Turn (Enemy moves)
+      endTurn();
+    }
+
+    function endTurn() {
+      if (enemy.alive) {
+        moveEnemy();
+        // Check if enemy hit player
+        if (enemy.x === player.x && enemy.y === player.y) {
+          player.hp -= enemy.atk;
+          if (player.hp <= 0) {
+            player.hp = 0;
+            gameState = 'DEAD';
+            showMessage("You Died");
+          }
+        }
+      }
+      draw();
+    }
+
+    function moveEnemy() {
+      // Simple pathing: Move towards player if within 5 tiles, otherwise wander
+      let dx = player.x - enemy.x;
+      let dy = player.y - enemy.y;
+      let dist = Math.abs(dx) + Math.abs(dy);
+
+      if (dist <= 6) {
+        let moveX = 0;
+        let moveY = 0;
+        
+        // Prefer horizontal if further away
+        if (Math.abs(dx) > Math.abs(dy)) {
+          moveX = Math.sign(dx);
+        } else {
+          moveY = Math.sign(dy);
+        }
+
+        let nextX = enemy.x + moveX;
+        let nextY = enemy.y + moveY;
+
+        // Only move if not blocked by wall (and not stepping on player yet, they handle that in endTurn)
+        if (!isWall(nextX, nextY) && !(nextX === player.x && nextY === player.y)) {
+          // Check if another enemy is there (not needed for 1 enemy)
+          enemy.x = nextX;
+          enemy.y = nextY;
+        } else {
+          // Blocked? Try the other axis
+          moveX = 0; moveY = 0;
+          if (Math.abs(dy) > 0) moveY = Math.sign(dy);
+          nextX = enemy.x + moveX; nextY = enemy.y + moveY;
+          if (!isWall(nextX, nextY) && !(nextX === player.x && nextY === player.y)) {
+            enemy.x = nextX;
+            enemy.y = nextY;
+          }
+        }
+      }
+    }
+
+    function showMessage(text) {
+      document.getElementById('msg-title').innerText = text;
+      document.getElementById('message').style.display = 'block';
+    }
+
+    function restartGame() {
+      player = { x: 2, y: 2, hp: 10, maxHp: 10, atk: 1 };
+      enemy = { x: 10, y: 10, hp: 5, atk: 2, alive: true };
+      loot = { x: 15, y: 15, active: true };
+      gameState = 'PLAYING';
+      document.getElementById('message').style.display = 'none';
+      generateMap();
+      draw();
+    }
+
+    // Keyboard support for desktop testing
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowUp' || e.key === 'w') doTurn(0, -1);
+      if (e.key === 'ArrowDown' || e.key === 's') doTurn(0, 1);
+      if (e.key === 'ArrowLeft' || e.key === 'a') doTurn(-1, 0);
+      if (e.key === 'ArrowRight' || e.key === 'd') doTurn(1, 0);
+      if (e.key === ' ' && gameState !== 'PLAYING') restartGame(); // Space to restart
+    });
+
+    // Init
+    generateMap();
+    draw();
+  </script>
+</body>
+</html>
