@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Project 2 - Stage 5</title>
+  <style>
+    * { box-sizing: border-box; user-select: none; }
+    body {
+      margin: 0;
+      background: #0d0f12;
+      color: #ccc;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: monospace;
+      touch-action: none;
+    }
+    #game-container {
+      position: relative;
+      width: 100%;
+      max-width: 500px;
+      aspect-ratio: 1/1;
+      background: #000;
+      box-shadow: 0 0 30px rgba(0,0,0,0.9);
+      overflow: hidden;
+    }
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      image-rendering: pixelated;
+    }
+    #ui {
+      width: 100%;
+      max-width: 500px;
+      display: flex;
+      justify-content: space-between;
+      padding: 10px;
+      font-size: 14px;
+      font-weight: bold;
+      color: #fff;
+      background: #1a1c23;
+      border-bottom: 2px solid #333;
+    }
+    #location { color: #ffcc00; }
+    #controls {
+      width: 100%;
+      max-width: 500px;
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 5px;
+      padding: 10px;
+      background: #1a1c23;
+    }
+    button {
+      padding: 15px;
+      font-size: 18px;
+      font-weight: bold;
+      background: #2a2e38;
+      color: #fff;
+      border: 1px solid #444;
+      border-radius: 8px;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+    button:active { background: #444; }
+    .empty { visibility: hidden; }
+    .wait-btn { background: #444; font-size: 14px; }
+    #message {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(10,12,16,0.95);
+      padding: 20px;
+      border: 2px solid #ffcc00;
+      border-radius: 10px;
+      text-align: center;
+      display: none;
+      z-index: 10;
+      width: 80%;
+      box-shadow: 0 0 20px rgba(255, 204, 0, 0.2);
+    }
+  </style>
+</head>
+<body>
+
+  <div id="ui">
+    <div>HP: <span id="hp" style="color:#ff5555">12</span></div>
+    <div>ATK: <span id="atk" style="color:#55ff55">2</span></div>
+    <div>GOLD: <span id="gold" style="color:#ffcc00">0</span></div>
+    <div>KEY: <span id="hasKey" style="color:#ff3333">No</span></div>
+    <div>LOC: <span id="location">Courtyard</span></div>
+  </div>
+
+  <div id="game-container">
+    <canvas id="gameCanvas" width="320" height="320"></canvas>
+    <div id="message">
+      <h2 id="msg-title" style="margin:0 0 15px 0; color: #fff;">You Died</h2>
+      <button id="msg-btn" style="padding: 10px 30px; background:#ffcc00; color:#000; border:none; font-weight:bold; border-radius:5px;">Restart</button>
+    </div>
+  </div>
+
+  <div id="controls">
+    <button class="wait-btn" onclick="doTurn(0, 0)">WAIT</button>
+    <button onclick="doTurn(0, -1)">▲</button>
+    <button class="wait-btn" onclick="interact()">USE</button>
+    <button onclick="doTurn(-1, 0)">◀</button>
+    <button onclick="doTurn(0, 1)">▼</button>
+    <button onclick="doTurn(1, 0)">▶</button>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    const TILE_SIZE = 16;
+    const MAP_SIZE = 20;
+
+    let player = { x: 10, y: 16, hp: 12, maxHp: 12, atk: 2, gold: 0, hasKey: false };
+    let gameState = 'PLAYING'; 
+    let currentMap = 'HUB';
+    let shakeTime = 0;
+
+    function addWalls(map, x1, y1, x2, y2) {
+      for (let y = y1; y <= y2; y++) {
+        for (let x = x1; x <= x2; x++) {
+          if (x === x1 || y === y1 || x === x2 || y === y2) {
+            map.walls.push({x, y});
+          }
+        }
+      }
+    }
+
+    let maps = {
+      HUB: { name: "Courtyard", walls: [], doors: [], enemy: null, loot: null, exit: null, bossDoor: null, npc: null },
+      BLACKSMITH: { name: "Blacksmith", walls: [], doors: [], enemy: null, loot: null, npc: null },
+      HOUSE: { name: "Abandoned House", walls: [], doors: [], enemy: null, loot: null, npc: null, offeringTree: null },
+      BOSS_ROOM: { name: "Boss Lair", walls: [], doors: [], enemy: null, loot: null, npc: null }
+    };
+
+    function buildMaps() {
+      // --- HUB ---
+      let hub = maps.HUB;
+      hub.walls = [];
+      addWalls(hub, 0, 0, 19, 19);
+      addWalls(hub, 5, 10, 14, 10);
+      
+      hub.doors = [
+        { x: 4, y: 1, target: 'BLACKSMITH', spawnX: 10, spawnY: 16, color: '#ffaa00' },
+        { x: 10, y: 1, target: 'HOUSE', spawnX: 10, spawnY: 16, color: '#ff00ff' }
+      ];
+      hub.bossDoor = { x: 16, y: 1, target: 'BOSS_ROOM', spawnX: 10, spawnY: 16, color: '#00aaff' };
+      
+      hub.enemy = { type: 'goblin', x: 10, y: 6, hp: 6, maxHp: 6, atk: 2, alive: true };
+      hub.loot = { x: 17, y: 17, active: true, type: 'atk' };
+
+      // --- BLACKSMITH ---
+      let smith = maps.BLACKSMITH;
+      smith.walls = [];
+      addWalls(smith, 0, 0, 19, 19);
+      addWalls(smith, 3, 5, 16, 5); 
+      addWalls(smith, 3, 5, 3, 12); 
+      addWalls(smith, 16, 5, 16, 12);
+      
+      smith.doors = [{ x: 10, y: 18, target: 'HUB', spawnX: 4, spawnY: 2, color: '#ffffff' }];
+      smith.enemy = { type: 'tinman', x: 10, y: 10, hp: 15, maxHp: 15, atk: 4, alive: true }; 
+      smith.loot = { x: 10, y: 7, active: true, type: 'key' };
+      smith.npc = { x: 6, y: 7, text: "Blacksmith: 'I forged this key, but the Tin Man took it. Bring it back to the boss door.'" };
+
+      // --- HOUSE (Offering Tree) ---
+      let house = maps.HOUSE;
+      house.walls = [];
+      addWalls(house, 0, 0, 19, 19);
+      addWalls(house, 5, 5, 14, 14); 
+      house.walls = house.walls.filter(w => !(w.x === 10 && w.y === 14)); // Doorway
+      
+      house.doors = [{ x: 10, y: 18, target: 'HUB', spawnX: 10, spawnY: 2, color: '#ffffff' }];
+      house.enemy = { type: 'goblin', x: 10, y: 10, hp: 8, maxHp: 8, atk: 2, alive: true }; 
+      house.loot = { x: 10, y: 16, active: true, type: 'atk' };
+      
+      // The Offering Tree inside the inner room
+      house.offeringTree = { x: 10, y: 7, used: false };
+
+      // --- BOSS ROOM ---
+      let boss = maps.BOSS_ROOM;
+      boss.walls = [];
+      addWalls(boss, 0, 0, 19, 19);
+      boss.doors = [{ x: 10, y: 18, target: 'HUB', spawnX: 16, spawnY: 2, color: '#ffffff' }];
+      boss.exit = { x: 10, y: 2 }; 
+      boss.enemy = { type: 'boss', x: 10, y: 6, hp: 30, maxHp: 30, atk: 5, alive: true };
+    }
+
+    function isWall(x, y) {
+      return maps[currentMap].walls.some(w => w.x === x && w.y === y);
+    }
+
+    // --- SPRITE DRAWING HELPERS ---
+    function drawPlayer(x, y) {
+      const px = x * TILE_SIZE;
+      const py = y * TILE_SIZE;
+      ctx.fillStyle = '#333'; ctx.fillRect(px + 2, py + 4, 12, 10);
+      ctx.fillStyle = '#fff'; ctx.fillRect(px + 4, py + 1, 8, 5);
+      ctx.fillStyle = '#000'; ctx.fillRect(px + 5, py + 3, 6, 2);
+      ctx.fillStyle = '#ccc'; ctx.fillRect(px + 13, py + 6, 3, 6);
+    }
+
+    function drawGoblin(x, y) {
+      const px = x * TILE_SIZE; const py = y * TILE_SIZE;
+      ctx.fillStyle = '#2a7a2a'; ctx.fillRect(px + 3, py + 4, 10, 8);
+      ctx.fillStyle = '#111'; ctx.fillRect(px + 5, py + 6, 2, 2); ctx.fillRect(px + 9, py + 6, 2, 2);
+      ctx.fillStyle = '#a33'; ctx.fillRect(px + 12, py + 8, 3, 6);
+    }
+
+    function drawTinMan(x, y) {
+      const px = x * TILE_SIZE; const py = y * TILE_SIZE;
+      ctx.fillStyle = '#888'; ctx.fillRect(px + 2, py + 2, 12, 12);
+      ctx.fillStyle = '#555'; ctx.fillRect(px + 4, py + 4, 8, 8);
+      ctx.fillStyle = '#f00'; ctx.fillRect(px + 7, py + 6, 2, 2);
+    }
+
+    function drawBoss(x, y) {
+      const px = x * TILE_SIZE; const py = y * TILE_SIZE;
+      ctx.fillStyle = '#6a0dad'; ctx.fillRect(px + 1, py + 1, 14, 14);
+      ctx.fillStyle = '#ff00ff'; ctx.fillRect(px + 3, py + 4, 3, 3); ctx.fillRect(px + 10, py + 4, 3, 3);
+      ctx.fillStyle = '#fff'; ctx.fillRect(px + 4, py + 10, 8, 2);
+      ctx.fillStyle = '#000'; ctx.fillRect(px + 6, py + 11, 1, 1); ctx.fillRect(px + 9, py + 11, 1, 1);
+    }
+
+    function drawKey(x, y) {
+      const px = x * TILE_SIZE; const py = y * TILE_SIZE;
+      ctx.fillStyle = '#ffcc00'; ctx.fillRect(px + 6, py + 4, 4, 8);
+      ctx.fillStyle = '#ff0000'; ctx.fillRect(px + 4, py + 2, 8, 4);
+      ctx.fillStyle = '#ffcc00'; ctx.fillRect(px + 10, py + 10, 4, 2);
+    }
+
+    function drawPotion(x, y) {
+      const px = x * TILE_SIZE; const py = y * TILE_SIZE;
+      ctx.fillStyle = '#00aaff'; ctx.fillRect(px + 4, py + 6, 8, 8);
+      ctx.fillStyle = '#fff'; ctx.fillRect(px + 6, py + 3, 4, 3);
+    }
+
+    function drawNPC(x, y, color) {
+      const px = x * TILE_SIZE; const py = y * TILE_SIZE;
+      ctx.fillStyle = color; ctx.fillRect(px + 3, py + 4, 10, 10);
+      ctx.fillStyle = '#fff'; ctx.fillRect(px + 5, py + 6, 2, 2); ctx.fillRect(px + 9, py + 6, 2, 2);
+    }
+
+    function drawTree(x, y) {
+      const px = x * TILE_SIZE; const py = y * TILE_SIZE;
+      // Trunk
+      ctx.fillStyle = '#5c3a21'; ctx.fillRect(px + 6, py + 8, 4, 8);
+      // Leaves
+      ctx.fillStyle = '#2e8b57'; 
+      ctx.fillRect(px + 2, py + 2, 12, 8);
+      ctx.fillRect(px + 4, py, 8, 12);
+      // Glowing eyes in the tree
+      ctx.fillStyle = '#ffcc00'; 
+      ctx.fillRect(px + 5, py + 5, 2, 2); 
+      ctx.fillRect(px + 9, py + 5, 2, 2);
+    }
+
+    function draw() {
+      let map = maps[currentMap];
+      
+      let offsetX = 0, offsetY = 0;
+      if (shakeTime > 0) {
+        offsetX = (Math.random() - 0.5) * 6;
+        offsetY = (Math.random() - 0.5) * 6;
+        shakeTime = 0; // Reset immediately so it only shakes for one frame
+      }
+      
+      ctx.save();
+      ctx.translate(offsetX, offsetY);
+
+      ctx.fillStyle = '#121418';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Walls
+      ctx.fillStyle = '#3a404a';
+      map.walls.forEach(w => {
+        ctx.fillRect(w.x * TILE_SIZE, w.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+        ctx.fillStyle = '#4a505a'; ctx.fillRect(w.x * TILE_SIZE, w.y * TILE_SIZE, TILE_SIZE, 2); ctx.fillStyle = '#3a404a';
+      });
+
+      // Doors
+      if (map.doors) {
+        map.doors.forEach(d => {
+          ctx.fillStyle = d.color;
+          ctx.fillRect(d.x * TILE_SIZE, d.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          ctx.strokeStyle = '#111'; ctx.lineWidth = 2;
+          ctx.strokeRect(d.x * TILE_SIZE + 1, d.y * TILE_SIZE + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+        });
+      }
+
+      // Boss Door
+      if (map.bossDoor) {
+        ctx.fillStyle = map.bossDoor.color;
+        ctx.fillRect(map.bossDoor.x * TILE_SIZE, map.bossDoor.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+        if (!player.hasKey) {
+          ctx.fillStyle = '#111'; ctx.fillRect(map.bossDoor.x * TILE_SIZE + 5, map.bossDoor.y * TILE_SIZE + 6, 6, 6);
+          ctx.fillStyle = '#ccc'; ctx.fillRect(map.bossDoor.x * TILE_SIZE + 7, map.bossDoor.y * TILE_SIZE + 8, 2, 2);
+        }
+      }
+
+      // Exit
+      if (map.exit) {
+        ctx.fillStyle = '#00ffff'; ctx.fillRect(map.exit.x * TILE_SIZE, map.exit.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+        ctx.fillStyle = '#fff'; ctx.fillRect(map.exit.x * TILE_SIZE + 4, map.exit.y * TILE_SIZE + 4, 8, 8);
+      }
+
+      // Loot
+      if (map.loot && map.loot.active) {
+        if (map.loot.type === 'key') drawKey(map.loot.x, map.loot.y);
+        else drawPotion(map.loot.x, map.loot.y);
+      }
+
+      // NPC
+      if (map.npc) {
+        drawNPC(map.npc.x, map.npc.y, '#c39b5a'); // Brownish NPC
+      }
+
+      // Offering Tree
+      if (map.offeringTree) {
+        drawTree(map.offeringTree.x, map.offeringTree.y);
+      }
+
+      // Enemy
+      if (map.enemy && map.enemy.alive) {
+        if (map.enemy.type === 'goblin') drawGoblin(map.enemy.x, map.enemy.y);
+        if (map.enemy.type === 'tinman') drawTinMan(map.enemy.x, map.enemy.y);
+        if (map.enemy.type === 'boss') drawBoss(map.enemy.x, map.enemy.y);
+
+        const hpPercent = map.enemy.hp / map.enemy.maxHp;
+        ctx.fillStyle = '#111'; ctx.fillRect(map.enemy.x * TILE_SIZE, map.enemy.y * TILE_SIZE - 5, TILE_SIZE, 3);
+        ctx.fillStyle = hpPercent > 0.5 ? '#4caf50' : (hpPercent > 0.25 ? '#ff9800' : '#f44336');
+        ctx.fillRect(map.enemy.x * TILE_SIZE, map.enemy.y * TILE_SIZE - 5, TILE_SIZE * hpPercent, 3);
+      }
+
+      drawPlayer(player.x, player.y);
+
+      ctx.restore();
+      updateUI();
+    }
+
+    function updateUI() {
+      document.getElementById('hp').innerText = player.hp;
+      document.getElementById('atk').innerText = player.atk;
+      document.getElementById('gold').innerText = player.gold;
+      document.getElementById('location').innerText = maps[currentMap].name;
+      document.getElementById('hasKey').innerText = player.hasKey ? "Yes" : "No";
+      document.getElementById('hasKey').style.color = player.hasKey ? "#00ff00" : "#ff3333";
+    }
+
+    // The "USE" button / Spacebar interaction
+    function interact() {
+      if (gameState !== 'PLAYING') return;
+      let map = maps[currentMap];
+      
+      // Check surrounding tiles for an NPC or Tree
+      const dirs = [[0,1], [1,0], [0,-1], [-1,0]];
+      for (let d of dirs) {
+        let tx = player.x + d[0];
+        let ty = player.y + d[1];
+        
+        if (map.npc && map.npc.x === tx && map.npc.y === ty) {
+          showMessage(map.npc.text, true);
+          return;
+        }
+        
+        if (map.offeringTree && map.offeringTree.x === tx && map.offeringTree.y === ty) {
+          if (map.offeringTree.used) {
+            showMessage("The tree is dormant...", true);
+            return;
+          }
+          if (player.atk <= 1) {
+            showMessage("The tree rejects your weakness. You need an item to offer.", true);
+            return;
+          }
+          
+          // Trade ATK for Gold (RNG)
+          player.atk -= 1;
+          let goldFound = Math.floor(Math.random() * 20) + 10;
+          player.gold += goldFound;
+          map.offeringTree.used = true;
+          showMessage(`You feed the tree a weapon. It drops ${goldFound} Gold!`, true);
+          draw();
+          return;
+        }
+      }
+      showMessage("Nothing to use here.", true);
+    }
+
+    function doTurn(dx, dy) {
+      if (gameState !== 'PLAYING') return;
+      
+      // If it's a wait action (0,0), skip movement and just end turn
+      if (dx === 0 && dy === 0) {
+        endTurn();
+        return;
+      }
+
+      let targetX = player.x + dx;
+      let targetY = player.y + dy;
+      let map = maps[currentMap];
+
+      if (isWall(targetX, targetY)) return;
+
+      if (map.bossDoor && targetX === map.bossDoor.x && targetY === map.bossDoor.y) {
+        if (player.hasKey) {
+          currentMap = map.bossDoor.target;
+          player.x = map.bossDoor.spawnX;
+          player.y = map.bossDoor.spawnY;
+          draw();
+        } else {
+          showMessage("The door is locked. You need a red key.", true);
+        }
+        return;
+      }
+
+      let door = map.doors.find(d => d.x === targetX && d.y === targetY);
+      if (door) {
+        currentMap = door.target;
+        player.x = door.spawnX;
+        player.y = door.spawnY;
+        draw();
+        return;
+      }
+
+      if (map.exit && targetX === map.exit.x && targetY === map.exit.y) {
+        gameState = 'WIN';
+        showMessage("You cleared the dungeon!");
+        return;
+      }
+
+      if (map.enemy && map.enemy.alive && targetX === map.enemy.x && targetY === map.enemy.y) {
+        map.enemy.hp -= player.atk;
+        shakeTime = 8; 
+        if (map.enemy.hp <= 0) {
+          map.enemy.alive = false;
+          player.gold += Math.floor(Math.random() * 10) + 5; // Drop gold on death
+        }
+        endTurn(); 
+        return;
+      }
+
+      player.x = targetX;
+      player.y = targetY;
+
+      if (map.loot && map.loot.active && player.x === map.loot.x && player.y === map.loot.y) {
+        map.loot.active = false;
+        if (map.loot.type === 'key') {
+          player.hasKey = true;
+          showMessage("You found the Boss Key!", true);
+        } else {
+          player.atk += 1;
+          showMessage("Found a weapon! ATK +1", true);
+        }
+      }
+
+      endTurn();
+    }
+
+    function endTurn() {
+      let map = maps[currentMap];
+      if (map.enemy && map.enemy.alive) {
+        moveEnemy(map.enemy);
+        if (map.enemy.x === player.x && map.enemy.y === player.y) {
+          player.hp -= map.enemy.atk;
+          shakeTime = 10; 
+          if (player.hp <= 0) {
+            player.hp = 0;
+            gameState = 'DEAD';
+            showMessage("You Died");
+          }
+        }
+      }
+      draw();
+    }
+
+    function moveEnemy(enemy) {
+      let dx = player.x - enemy.x;
+      let dy = player.y - enemy.y;
+      let dist = Math.abs(dx) + Math.abs(dy);
+
+      if (dist <= 7) {
+        let moveX = 0, moveY = 0;
+        if (Math.abs(dx) > Math.abs(dy)) moveX = Math.sign(dx);
+        else moveY = Math.sign(dy);
+
+        let nextX = enemy.x + moveX, nextY = enemy.y + moveY;
+
+        if (!isWall(nextX, nextY) && !(nextX === player.x && nextY === player.y)) {
+          enemy.x = nextX; enemy.y = nextY;
+        } else {
+          moveX = 0; moveY = 0;
+          if (Math.abs(dy) > 0) moveY = Math.sign(dy);
+          nextX = enemy.x + moveX; nextY = enemy.y + moveY;
+          if (!isWall(nextX, nextY) && !(nextX === player.x && nextY === player.y)) {
+            enemy.x = nextX; enemy.y = nextY;
+          }
+        }
+      }
+    }
+
+    function showMessage(text, isDialog = false) {
+      document.getElementById('msg-title').innerText = text;
+      let btn = document.getElementById('msg-btn');
+      if (isDialog) {
+        btn.innerText = "Continue";
+        btn.style.background = '#444';
+        btn.style.color = '#fff';
+        btn.onclick = () => { document.getElementById('message').style.display = 'none'; };
+      } else {
+        btn.innerText = "Restart";
+        btn.style.background = '#ffcc00';
+        btn.style.color = '#000';
+        btn.onclick = restartGame;
+      }
+      document.getElementById('message').style.display = 'block';
+    }
+
+    function restartGame() {
+      player = { x: 10, y: 16, hp: 12, maxHp: 12, atk: 2, gold: 0, hasKey: false };
+      gameState = 'PLAYING';
+      currentMap = 'HUB';
+      buildMaps();
+      document.getElementById('message').style.display = 'none';
+      draw();
+    }
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowUp' || e.key === 'w') doTurn(0, -1);
+      if (e.key === 'ArrowDown' || e.key === 's') doTurn(0, 1);
+      if (e.key === 'ArrowLeft' || e.key === 'a') doTurn(-1, 0);
+      if (e.key === 'ArrowRight' || e.key === 'd') doTurn(1, 0);
+      if (e.key === '.') doTurn(0, 0); // Wait key
+      if (e.key === 'e') interact(); // Interact key
+      if (e.key === ' ' && gameState !== 'PLAYING') {
+         if (document.getElementById('message').style.display === 'block') document.querySelector('#msg-btn').click();
+         else restartGame();
+      }
+    });
+
+    buildMaps();
+    restartGame();
+  </script>
+</body>
+</html>
