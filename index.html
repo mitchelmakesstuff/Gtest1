@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>The Sanctum — Pixel Roguelike</title>
+<style>
+:root{--bg:#111014;--panel:#211e25;--border:#514653;--gold:#d9b875;--text:#e8dfd1;--muted:#988e9e}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font-family:monospace;display:flex;justify-content:center;align-items:center}
+#game{width:min(100%,440px);padding:10px;display:flex;flex-direction:column;gap:9px}
+header{text-align:center;padding:7px 0 9px;border-bottom:2px solid #39333e}
+h1{margin:0;color:var(--gold);font-size:clamp(20px,6vw,27px);letter-spacing:5px}
+header p{margin:7px 0 0;color:#898091;letter-spacing:3px;font-size:11px}
+#stats{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}
+.stat{background:var(--panel);border:1px solid #403744;padding:9px 2px;text-align:center}
+.stat-label{font-size:10px;color:var(--muted);margin-bottom:6px}
+.stat-value{font-size:17px;font-weight:bold}
+#hpValue{color:#e65b62}#atkValue{color:#e7ad61}#goldValue{color:#e8ce68}#depthValue{color:#ae91d9}
+#canvas-container{position:relative;width:100%;aspect-ratio:1;background:#09090b;border:3px solid var(--border);overflow:hidden}
+canvas{display:block;width:100%;height:100%;image-rendering:pixelated;image-rendering:crisp-edges}
+#location,#message{background:var(--panel);border:1px solid #403744;text-align:center;padding:12px 7px}
+#location{color:#c5ad8b;letter-spacing:1px;font-size:13px}
+#message{min-height:48px;color:#b5aaba;font-size:12px;line-height:1.5}
+#controls{width:204px;margin:0 auto;display:grid;grid-template-columns:repeat(3,1fr);gap:5px}
+.control{height:48px;background:#302936;border:1px solid #66566e;color:#eee3d3;border-radius:4px;font-size:22px;touch-action:manipulation}
+.control:active{background:#59466b}.empty{visibility:hidden}
+#footer{text-align:center;color:#625b69;font-size:9px;letter-spacing:1px;padding-bottom:4px}
+.overlay{display:none;position:absolute;inset:0;background:#08070bf2;z-index:5;align-items:center;justify-content:center;padding:16px}
+.overlay-content{width:100%;max-height:100%;overflow:auto;background:#241f29;border:2px solid #806b91;padding:18px;text-align:center}
+.overlay h2{color:var(--gold);font-size:18px;margin:0 0 12px}
+.overlay p{font-size:12px;line-height:1.6;margin:8px 0}
+.overlay button{display:block;width:100%;padding:12px;margin-top:9px;background:#393044;border:1px solid #806b91;color:#eee3d3;font:13px monospace;border-radius:3px}
+.overlay button:active{background:#59466b}
+@media(max-height:720px){body{align-items:flex-start}#game{gap:6px;padding:6px}header{padding:3px 0 6px}.stat{padding:6px 2px}#message{min-height:38px;padding:8px}.control{height:40px}}
+</style>
+</head>
+<body>
+<div id="game">
+  <header><h1>THE SANCTUM</h1><p>DESCENT INTO THE UNKNOWN</p></header>
+  <section id="stats">
+    <div class="stat"><div class="stat-label">HP</div><div class="stat-value" id="hpValue">20/20</div></div>
+    <div class="stat"><div class="stat-label">ATK</div><div class="stat-value" id="atkValue">3</div></div>
+    <div class="stat"><div class="stat-label">GOLD</div><div class="stat-value" id="goldValue">0</div></div>
+    <div class="stat"><div class="stat-label">DEPTH</div><div class="stat-value" id="depthValue">1</div></div>
+  </section>
+  <div id="canvas-container">
+    <canvas id="gameCanvas" width="320" height="320" aria-label="The Sanctum game board"></canvas>
+    <div class="overlay" id="overlay"><div class="overlay-content" id="overlayContent"></div></div>
+  </div>
+  <div id="location">THE SANCTUM</div>
+  <div id="message">A quiet place before the descent...</div>
+  <div id="controls">
+    <button class="control empty" tabindex="-1"></button><button class="control" data-move="0,-1">▲</button><button class="control empty" tabindex="-1"></button>
+    <button class="control" data-move="-1,0">◀</button><button class="control" data-move="0,1">▼</button><button class="control" data-move="1,0">▶</button>
+  </div>
+  <div id="footer">EVERY DESCENT HAS A PRICE</div>
+</div>
+<script>
+"use strict";
+// ===== Canvas and constants =====
+const canvas=document.getElementById("gameCanvas");
+const ctx=canvas.getContext("2d");
+ctx.imageSmoothingEnabled=false;
+const SIZE=20,TILE=16;
+const T={VOID:0,FLOOR:1,WALL:2,DOOR:3,PURPLE:4,BOSS_DOOR:5,ALTAR:6,VAULT:7,SMITH:8,TREE:9,RUIN:10,PORTAL:11};
+const C={bg:"#09090c",floor:"#39313b",wall:"#625362",wallDark:"#352d38",gold:"#eac75b",purple:"#a46bd1"};
+const $=id=>document.getElementById(id);
+const rand=(a,b)=>Math.floor(Math.random()*(b-a+1))+a;
+const shuffle=a=>{a=[...a];for(let i=a.length-1;i>0;i--){let j=rand(0,i);[a[i],a[j]]=[a[j],a[i]]}return a};
+const dist=(a,b,c,d)=>Math.abs(a-c)+Math.abs(b-d);
+
+// ===== Persistent upgrades =====
+const DEFAULT_SAVE={permanentGold:0,bonusMaxHp:0,bonusAtk:0};
+function loadSave(){
+  try{const v=JSON.parse(localStorage.getItem("sanctum_save")||"null")||{};
+    return {permanentGold:Math.max(0,Number(v.permanentGold)||0),bonusMaxHp:Math.max(0,Number(v.bonusMaxHp)||0),bonusAtk:Math.max(0,Number(v.bonusAtk)||0)};
+  }catch(e){return {...DEFAULT_SAVE}}
+}
+let saveData=loadSave();
+function saveGame(){try{localStorage.setItem("sanctum_save",JSON.stringify(saveData))}catch(e){setMessage("Could not save on this browser.")}}
+
+// ===== Runtime state =====
+const player={x:10,y:10,hp:20,maxHp:20,atk:3,gold:0,alive:true};
+let currentDepth=1,currentArea="sanctum",map=[],enemies=[],coins=[],rooms=[],keyItem=null,boss=null;
+let flags={treeUsed:false,keyFound:false,keyCollected:false,bossDefeated:false};
+let overlayOpen=false,gameOver=false;
+
+// ===== UI =====
+function setMessage(s){$("message").textContent=s}
+function updateStats(){
+  $("hpValue").textContent=player.hp+"/"+player.maxHp;
+  $("atkValue").textContent=player.atk;
+  $("goldValue").textContent=player.gold;
+  $("depthValue").textContent=currentDepth;
+}
+function updateLocation(){
+  $("location").textContent=currentArea==="sanctum"?"THE SANCTUM":currentArea==="courtyard"?"THE COURTYARD":"THE GUARDIAN'S CHAMBER";
+}
+function openOverlay(title,body,buttons){
+  const content=$("overlayContent");
+  content.innerHTML="";
+  const h=document.createElement("h2");h.textContent=title;content.appendChild(h);
+  const p=document.createElement("p");p.textContent=body;content.appendChild(p);
+  buttons.forEach(b=>{const el=document.createElement("button");el.textContent=b.label;el.addEventListener("click",b.action);content.appendChild(el)});
+  $("overlay").style.display="flex";overlayOpen=true;
+}
+function closeOverlay(){$("overlay").style.display="none";overlayOpen=false;render()}
+function button(label,action){return {label,action}}
+
+// ===== Map helpers =====
+function emptyMap(){return Array.from({length:SIZE},()=>Array(SIZE).fill(T.WALL))}
+function carve(x,y,w,h){for(let yy=y;yy<y+h;yy++)for(let xx=x;xx<x+w;xx++)if(xx>0&&yy>0&&xx<SIZE-1&&yy<SIZE-1)map[yy][xx]=T.FLOOR}
+function corridor(x1,y1,x2,y2){
+  let x=x1,y=y1;
+  while(x!==x2){map[y][x]=T.FLOOR;x+=Math.sign(x2-x)}
+  while(y!==y2){map[y][x]=T.FLOOR;y+=Math.sign(y2-y)}
+  map[y][x]=T.FLOOR;
+}
+function put(x,y,t){if(x>=0&&y>=0&&x<SIZE&&y<SIZE)map[y][x]=t}
+function isWall(x,y){return x<0||y<0||x>=SIZE||y>=SIZE||map[y][x]===T.WALL||map[y][x]===T.VOID}
+function freeAt(x,y){
+  return !isWall(x,y)&&!(x===player.x&&y===player.y)&&!enemies.some(e=>e.alive&&e.x===x&&e.y===y);
+}
+
+// ===== Sanctum =====
+function generateSanctum(){
+  map=emptyMap();enemies=[];coins=[];rooms=[];keyItem=null;boss=null;
+  carve(6,6,8,8);
+  player.x=10;player.y=10;
+  put(8,8,T.ALTAR);put(12,8,T.VAULT);put(10,13,T.PURPLE);
+  currentArea="sanctum";updateLocation();render();
+}
+
+// ===== Dungeon floor and rooms =====
+function generateCourtyard(){
+  map=emptyMap();enemies=[];coins=[];rooms=[];keyItem=null;boss=null;
+  flags={treeUsed:false,keyFound:false,keyCollected:false,bossDefeated:false};
+  // Central courtyard and three rooms at randomized corners.
+  carve(7,7,6,6);
+  const positions=shuffle([{x:2,y:2,w:5,h:5},{x:13,y:2,w:5,h:5},{x:2,y:13,w:5,h:5},{x:13,y:13,w:5,h:5}]).slice(0,3);
+  const types=shuffle(["Blacksmith","Offering Tree","Abandoned Ruin"]);
+  positions.forEach((p,i)=>{
+    carve(p.x,p.y,p.w,p.h);
+    const cx=p.x+2,cy=p.y+2;
+    corridor(9+(i%2)*2,10,cx,cy);
+    rooms.push({...p,type:types[i],cx,cy});
+  });
+  // A door tile at each room entrance is decorative/passable.
+  rooms.forEach(r=>put(r.cx,r.cy,T.DOOR));
+  const smith=rooms.find(r=>r.type==="Blacksmith");
+  const tree=rooms.find(r=>r.type==="Offering Tree");
+  const ruin=rooms.find(r=>r.type==="Abandoned Ruin");
+  if(smith)put(smith.cx,smith.cy-1,T.SMITH);
+  if(tree)put(tree.cx,tree.cy-1,T.TREE);
+  if(ruin)put(ruin.cx,ruin.cy-1,T.RUIN);
+  put(10,7,T.BOSS_DOOR);
+  put(10,13,T.DOOR);
+  player.x=10;player.y=12;currentArea="courtyard";
+  spawnEnemies();updateLocation();render();
+}
+function getEnemyStats(type){
+  const d=currentDepth-1;
+  if(type==="goblin")return {hp:5+d*2,atk:2+Math.floor(d*.7)};
+  if(type==="tinman")return {hp:12+d*3,atk:3+Math.floor(d*1.2)};
+  return {hp:35+d*10,atk:5+d*2};
+}
+function spawnEnemy(type,x,y){const s=getEnemyStats(type);enemies.push({type,x,y,hp:s.hp,maxHp:s.hp,atk:s.atk,alive:true})}
+function spawnEnemies(){
+  const spawn=(type,count)=>{let tries=0,done=0;while(done<count&&tries++<400){let x=rand(1,18),y=rand(1,18);if(freeAt(x,y)&&dist(x,y,player.x,player.y)>4){spawnEnemy(type,x,y);done++}}};
+  spawn("goblin",Math.min(2+currentDepth,8));spawn("tinman",Math.min(Math.floor(currentDepth/2),4));
+}
+
+// ===== Drawing =====
+function rect(x,y,w,h,color){ctx.fillStyle=color;ctx.fillRect(x*TILE,y*TILE,w*TILE,h*TILE)}
+function drawFloor(x,y){
+  rect(x,y,1,1,C.floor);ctx.fillStyle="#453b48";ctx.fillRect(x*TILE+2,y*TILE+2,12,12);
+  ctx.fillStyle="#39313b";ctx.fillRect(x*TILE+3,y*TILE+3,10,10);
+}
+function drawWall(x,y){
+  rect(x,y,1,1,C.wallDark);ctx.fillStyle=C.wall;ctx.fillRect(x*TILE,y*TILE,16,13);
+  ctx.fillStyle="#756477";ctx.fillRect(x*TILE,y*TILE,16,3);
+  ctx.fillStyle="#28232c";ctx.fillRect(x*TILE,y*TILE+13,16,3);
+}
+function drawSpecial(x,y,t){
+  const px=x*TILE,py=y*TILE;
+  if(t===T.ALTAR){ctx.fillStyle="#51405f";ctx.fillRect(px+3,py+5,10,9);ctx.fillStyle="#b78ae3";ctx.fillRect(px+5,py+2,6,6);ctx.fillStyle="#e1c5ff";ctx.fillRect(px+7,py+4,2,2)}
+  if(t===T.VAULT){ctx.fillStyle="#886331";ctx.fillRect(px+2,py+5,12,9);ctx.fillStyle="#d4ad52";ctx.fillRect(px+3,py+6,10,2);ctx.fillStyle="#f1d27a";ctx.fillRect(px+7,py+9,2,3)}
+  if(t===T.SMITH){ctx.fillStyle="#56535b";ctx.fillRect(px+3,py+5,10,9);ctx.fillStyle="#c17b43";ctx.fillRect(px+5,py+2,6,5);ctx.fillStyle="#e3a35b";ctx.fillRect(px+7,py+3,3,3)}
+  if(t===T.TREE){ctx.fillStyle="#694b36";ctx.fillRect(px+7,py+8,3,7);ctx.fillStyle="#467b48";ctx.fillRect(px+3,py+2,10,8);ctx.fillStyle="#a1c16a";ctx.fillRect(px+6,py+3,4,3)}
+  if(t===T.RUIN){ctx.fillStyle="#77717b";ctx.fillRect(px+3,py+4,10,10);ctx.fillStyle="#aaa1ad";ctx.fillRect(px+5,py+2,6,4);ctx.fillStyle="#38313c";ctx.fillRect(px+6,py+7,4,5)}
+}
+function drawDoor(x,y,t){
+  const px=x*TILE,py=y*TILE;ctx.fillStyle="#241e27";ctx.fillRect(px+2,py+2,12,14);
+  ctx.fillStyle=t===T.PURPLE?"#a46bd1":t===T.BOSS_DOOR?"#8d353e":"#a17a4d";ctx.fillRect(px+4,py+3,8,13);
+  ctx.fillStyle=t===T.PURPLE?"#d5a7ff":t===T.BOSS_DOOR?"#e0a24e":"#d6b16d";ctx.fillRect(px+7,py+7,2,3);
+}
+function drawMap(){
+  for(let y=0;y<SIZE;y++)for(let x=0;x<SIZE;x++){
+    const t=map[y][x];if(t===T.WALL||t===T.VOID){drawWall(x,y);continue}
+    drawFloor(x,y);
+    if([T.DOOR,T.PURPLE,T.BOSS_DOOR].includes(t))drawDoor(x,y,t);
+    if(t>=T.ALTAR&&t<=T.RUIN)drawSpecial(x,y,t);
+    if(t===T.PORTAL){ctx.fillStyle="#7543a3";ctx.fillRect(x*TILE+2,y*TILE+2,12,12);ctx.fillStyle="#d3a5ff";ctx.fillRect(x*TILE+5,y*TILE+5,6,6)}
+  }
+}
+function drawPlayer(){
+  const x=player.x*TILE,y=player.y*TILE;
+  ctx.fillStyle="#17131b";ctx.fillRect(x+3,y+13,10,2);
+  ctx.fillStyle="#51434b";ctx.fillRect(x+5,y+10,3,5);ctx.fillRect(x+9,y+10,3,5);
+  ctx.fillStyle="#82705e";ctx.fillRect(x+4,y+6,8,6);
+  ctx.fillStyle="#e4d4a4";ctx.fillRect(x+5,y+2,7,6);
+  ctx.fillStyle="#a58c6d";ctx.fillRect(x+4,y+1,9,3);
+  ctx.fillStyle="#352d30";ctx.fillRect(x+6,y+5,1,1);ctx.fillRect(x+10,y+5,1,1);
+}
+function drawEnemy(e){
+  const x=e.x*TILE,y=e.y*TILE;
+  if(e.type==="goblin"){
+    ctx.fillStyle="#49613a";ctx.fillRect(x+4,y+7,8,7);ctx.fillStyle="#83a65c";ctx.fillRect(x+4,y+3,8,6);ctx.fillRect(x+1,y+5,4,3);ctx.fillRect(x+11,y+5,4,3);ctx.fillStyle="#e9d75d";ctx.fillRect(x+6,y+5,2,2);ctx.fillRect(x+10,y+5,2,2);
+  }else if(e.type==="tinman"){
+    ctx.fillStyle="#697983";ctx.fillRect(x+4,y+10,3,5);ctx.fillRect(x+9,y+10,3,5);ctx.fillStyle="#9babb5";ctx.fillRect(x+3,y+6,10,7);ctx.fillStyle="#bdc8ce";ctx.fillRect(x+4,y+2,8,6);ctx.fillStyle="#d15b53";ctx.fillRect(x+6,y+5,2,2);ctx.fillRect(x+10,y+5,2,2);
+  }else{
+    ctx.fillStyle="#702b39";ctx.fillRect(x+2,y+6,12,9);ctx.fillStyle="#c34c55";ctx.fillRect(x+3,y+4,10,8);ctx.fillRect(x+4,y+1,8,7);ctx.fillStyle="#d0a15c";ctx.fillRect(x+1,y,3,5);ctx.fillRect(x+12,y,3,5);ctx.fillStyle="#ffe18b";ctx.fillRect(x+5,y+4,2,2);ctx.fillRect(x+10,y+4,2,2);
+  }
+}
+function drawEntities(){
+  coins.forEach(c=>{if(!c.collected){const x=c.x*TILE,y=c.y*TILE;ctx.fillStyle="#9b742b";ctx.fillRect(x+5,y+5,7,7);ctx.fillStyle=C.gold;ctx.fillRect(x+6,y+4,5,8);ctx.fillStyle="#fff0a4";ctx.fillRect(x+7,y+5,2,3)}});
+  if(keyItem&&!keyItem.collected){const x=keyItem.x*TILE,y=keyItem.y*TILE;ctx.fillStyle="#f1d66d";ctx.fillRect(x+5,y+4,6,3);ctx.fillRect(x+9,y+5,2,6);ctx.fillRect(x+8,y+10,4,2)}
+  enemies.forEach(e=>{if(e.alive)drawEnemy(e)});
+  if(player.alive)drawPlayer();
+}
+function render(){
+  ctx.clearRect(0,0,320,320);ctx.fillStyle=C.bg;ctx.fillRect(0,0,320,320);
+  drawMap();drawEntities();
+}
+
+// ===== Movement, interaction and turn handling =====
+function doTurn(dx,dy){
+  if(!player.alive||gameOver||overlayOpen)return;
+  const nx=player.x+dx,ny=player.y+dy;
+  if(isWall(nx,ny))return;
+  const enemy=enemies.find(e=>e.alive&&e.x===nx&&e.y===ny);
+  if(enemy){attackEnemy(enemy);endTurn();return}
+  const tile=map[ny][nx];
+  if(tile===T.ALTAR){showAltar();return}
+  if(tile===T.VAULT){openOverlay("THE VAULT","Permanent gold stored: "+saveData.permanentGold,[button("Close",closeOverlay)]);return}
+  if(tile===T.SMITH){showShop();return}
+  if(tile===T.TREE){showTree();return}
+  if(tile===T.RUIN){showRuin();return}
+  if(tile===T.PURPLE){generateCourtyard();setMessage("You descend into the courtyard. Find the key.");return}
+  if(tile===T.BOSS_DOOR){
+    if(!flags.keyCollected){setMessage("The guardian's door is sealed. Find the key in the Abandoned Ruin.");return}
+    enterBossChamber();return;
+  }
+  if(tile===T.PORTAL){nextFloor();return}
+  player.x=nx;player.y=ny;
+  collectCoins();collectKey();
+  endTurn();
+}
+function attackEnemy(e){
+  e.hp-=player.atk;setMessage("You hit the "+e.type+" for "+player.atk+" damage.");
+  if(e.hp<=0){e.alive=false;const amount=e.type==="goblin"?rand(2,5):e.type==="tinman"?rand(4,9):rand(15,30);coins.push({x:e.x,y:e.y,amount,collected:false});setMessage("The "+e.type+" falls. It dropped "+amount+" gold.");if(e.type==="boss")defeatBoss()}
+  render();
+}
+function collectCoins(){coins.forEach(c=>{if(!c.collected&&c.x===player.x&&c.y===player.y){c.collected=true;player.gold+=c.amount;setMessage("Picked up "+c.amount+" gold.")}});updateStats()}
+function collectKey(){if(keyItem&&!keyItem.collected&&keyItem.x===player.x&&keyItem.y===player.y){keyItem.collected=true;flags.keyCollected=true;setMessage("You found the Guardian Key! The boss door is open.")}}
+function endTurn(){
+  if(!player.alive||gameOver)return;
+  for(const e of enemies){
+    if(!e.alive)continue;
+    const d=dist(e.x,e.y,player.x,player.y);
+    if(d===1){player.hp-=e.atk;setMessage("The "+e.type+" hits you for "+e.atk+" damage.");continue}
+    if(d<=8){
+      const options=shuffle([{x:0,y:-1},{x:0,y:1},{x:-1,y:0},{x:1,y:0}]);
+      let best=null,bestD=d;
+      for(const v of options){const x=e.x+v.x,y=e.y+v.y;if(isWall(x,y)|| (x===player.x&&y===player.y)||enemies.some(o=>o!==e&&o.alive&&o.x===x&&o.y===y))continue;const nd=dist(x,y,player.x,player.y);if(nd<bestD){bestD=nd;best={x,y}}}
+      if(best){e.x=best.x;e.y=best.y}
+    }
+  }
+  if(player.hp<=0){player.hp=0;defeatPlayer()}
+  updateStats();render();
+}
+
+// ===== Shop and altar =====
+function showShop(){
+  const healCost=5+currentDepth*2,atkCost=15+currentDepth*5;
+  openOverlay("THE BLACKSMITH","Carried gold: "+player.gold,[
+    button("Restore 10 HP — "+healCost+" gold",()=>{if(player.gold<healCost){setMessage("Not enough gold.");return}if(player.hp===player.maxHp){setMessage("Your health is already full.");return}player.gold-=healCost;player.hp=Math.min(player.maxHp,player.hp+10);updateStats();closeOverlay();setMessage("The blacksmith restores your health.")}),
+    button("+1 ATK — "+atkCost+" gold",()=>{if(player.gold<atkCost){setMessage("Not enough gold.");return}player.gold-=atkCost;player.atk++;updateStats();closeOverlay();setMessage("Your weapon has been sharpened.")}),
+    button("Leave shop",closeOverlay)
+  ]);
+}
+function showAltar(){
+  const hpCost=20+saveData.bonusMaxHp*2,atkCost=35+saveData.bonusAtk*3;
+  openOverlay("THE ANCIENT ALTAR","Permanent gold: "+saveData.permanentGold+". Upgrades survive defeat.",[
+    button("Permanent +5 Max HP — "+hpCost+" gold",()=>{if(saveData.permanentGold<hpCost){setMessage("Not enough permanent gold.");return}saveData.permanentGold-=hpCost;saveData.bonusMaxHp+=5;player.maxHp+=5;player.hp+=5;saveGame();updateStats();showAltar()}),
+    button("Permanent +1 ATK — "+atkCost+" gold",()=>{if(saveData.permanentGold<atkCost){setMessage("Not enough permanent gold.");return}saveData.permanentGold-=atkCost;saveData.bonusAtk++;player.atk++;saveGame();updateStats();showAltar()}),
+    button("Leave altar",closeOverlay)
+  ]);
+}
+function showTree(){
+  if(flags.treeUsed){setMessage("The Offering Tree has already been used this floor.");return}
+  openOverlay("THE OFFERING TREE","Sacrifice 1 ATK for a random amount of gold. This can only be done once per floor.",[
+    button("Make offering",()=>{if(player.atk<=1){setMessage("You cannot sacrifice your last point of ATK.");return}player.atk--;const reward=rand(10,35)+currentDepth*3;player.gold+=reward;flags.treeUsed=true;updateStats();closeOverlay();setMessage("The tree grants "+reward+" gold. Your ATK decreases by 1.")}),
+    button("Leave",closeOverlay)
+  ]);
+}
+function showRuin(){
+  if(flags.keyFound){setMessage(flags.keyCollected?"The ruin is empty. You already have its key.":"The key is still waiting in the ruin.");return}
+  flags.keyFound=true;
+  const r=rooms.find(v=>v.type==="Abandoned Ruin");
+  if(!r){setMessage("The ruin seems inaccessible.");return}
+  keyItem={x:r.cx,y:r.cy,collected:false};
+  openOverlay("ABANDONED RUIN","You uncover an ancient key. Step onto it to collect it.",[button("Continue",()=>{closeOverlay();setMessage("A key glints on the floor of the ruin.")})]);
+}
+
+// ===== Boss and progression =====
+function enterBossChamber(){
+  currentArea="boss";map=emptyMap();enemies=[];coins=[];rooms=[];keyItem=null;
+  carve(4,4,12,12);put(10,4,T.DOOR);player.x=10;player.y=13;
+  const s=getEnemyStats("boss");boss={type:"boss",x:10,y:8,hp:s.hp,maxHp:s.hp,atk:s.atk,alive:true};enemies=[boss];
+  updateLocation();setMessage("THE GUARDIAN AWAKENS!");render();
+}
+function defeatBoss(){
+  flags.bossDefeated=true;boss=null;put(10,4,T.PORTAL);
+  openOverlay("GUARDIAN DEFEATED","The guardian has fallen. A portal has opened to the next depth.",[button("Continue",closeOverlay)]);
+}
+function nextFloor(){
+  if(!flags.bossDefeated){setMessage("The portal is dormant.");return}
+  currentDepth++;player.hp=Math.min(player.maxHp,player.hp+5);generateSanctum();updateStats();setMessage("Depth "+currentDepth+". Return to the courtyard when ready.");
+}
+
+// ===== Defeat and restart =====
+function defeatPlayer(){
+  if(gameOver)return;gameOver=true;player.alive=false;
+  saveData.permanentGold+=player.gold;player.gold=0;saveGame();updateStats();
+  openOverlay("YOUR DESCENT ENDS","You fell at Depth "+currentDepth+". Your carried gold has been transferred to the permanent vault. Your upgrades remain.",[button("Return to Sanctum",restartGame)]);
+}
+function restartGame(){
+  gameOver=false;player.alive=true;player.maxHp=20+saveData.bonusMaxHp;player.hp=player.maxHp;player.atk=3+saveData.bonusAtk;player.gold=0;currentDepth=1;
+  flags={treeUsed:false,keyFound:false,keyCollected:false,bossDefeated:false};generateSanctum();updateStats();closeOverlay();setMessage("A new descent begins.");
+}
+
+// ===== Input =====
+document.querySelectorAll("[data-move]").forEach(b=>b.addEventListener("click",()=>{const [x,y]=b.dataset.move.split(",").map(Number);doTurn(x,y)}));
+document.addEventListener("keydown",e=>{
+  const k={ArrowUp:[0,-1],w:[0,-1],ArrowDown:[0,1],s:[0,1],ArrowLeft:[-1,0],a:[-1,0],ArrowRight:[1,0],d:[1,0]}[e.key];
+  if(k){e.preventDefault();doTurn(k[0],k[1])}
+});
+let touchX=0,touchY=0;
+canvas.addEventListener("touchstart",e=>{touchX=e.changedTouches[0].clientX;touchY=e.changedTouches[0].clientY},{passive:true});
+canvas.addEventListener("touchend",e=>{
+  const dx=e.changedTouches[0].clientX-touchX,dy=e.changedTouches[0].clientY-touchY;
+  if(Math.max(Math.abs(dx),Math.abs(dy))<22)return;
+  if(Math.abs(dx)>Math.abs(dy))doTurn(dx>0?1:-1,0);else doTurn(0,dy>0?1:-1);
+},{passive:true});
+
+// ===== Boot =====
+function bootGame(){
+  player.maxHp=20+saveData.bonusMaxHp;player.hp=player.maxHp;player.atk=3+saveData.bonusAtk;player.gold=0;player.alive=true;
+  generateSanctum();updateStats();updateLocation();setMessage("A quiet place before the descent. Find the purple door when you are ready.");
+}
+bootGame();
+</script>
+</body>
+</html>
