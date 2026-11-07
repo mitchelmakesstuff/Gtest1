@@ -3,56 +3,25 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Project 2 - Stage 13</title>
+  <title>Project 2 - The Haven</title>
   <style>
     * { box-sizing: border-box; user-select: none; }
-    body {
-      margin: 0;
-      background: #0d0f12;
-      color: #ccc;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      font-family: monospace;
-      touch-action: none;
+    body { margin:0; padding:8px; min-height:100vh; min-height:100dvh; background:#090b10; color:#ccc; font-family:monospace; display:grid; grid-template-columns:minmax(0,1fr) 150px; grid-template-rows:auto minmax(0,1fr); gap:8px; touch-action:none; overflow:hidden; }
+    #ui { grid-column:1/-1; display:flex; justify-content:space-between; gap:8px; padding:9px 12px; font-size:clamp(11px,2vw,14px); font-weight:bold; color:#fff; background:#1a1c23; border:1px solid #343946; border-radius:7px; }
+    #game-container { position:relative; width:100%; height:100%; min-width:0; min-height:0; aspect-ratio:3/2; align-self:center; background:#000; box-shadow:0 0 30px rgba(0,0,0,.65); overflow:hidden; border:1px solid #343946; }
+    canvas { width:100%; height:100%; display:block; image-rendering:pixelated; }
+    #controls { align-self:center; width:100%; display:grid; grid-template-columns:1fr 1fr; gap:7px; padding:8px; background:#151820; border:1px solid #343946; border-radius:8px; }
+    @media (orientation:portrait) {
+      body { display:flex; flex-direction:column; justify-content:center; }
+      body::before { content:"Rotate your device to landscape to play"; color:#f2d27a; font-size:13px; text-align:center; padding:5px; }
+      #game-container { width:min(100%,720px); height:auto; aspect-ratio:3/2; flex:0 0 auto; }
+      #controls { width:min(100%,720px); grid-template-columns:repeat(3,1fr); }
+      #ui { width:min(100%,720px); }
     }
-    #game-container {
-      position: relative;
-      width: 100%;
-      max-width: 500px;
-      aspect-ratio: 1/1;
-      background: #000;
-      box-shadow: 0 0 30px rgba(0,0,0,0.9);
-      overflow: hidden;
-    }
-    canvas {
-      width: 100%;
-      height: 100%;
-      display: block;
-      image-rendering: pixelated;
-    }
-    #ui {
-      width: 100%;
-      max-width: 500px;
-      display: flex;
-      justify-content: space-between;
-      padding: 10px;
-      font-size: 14px;
-      font-weight: bold;
-      color: #fff;
-      background: #1a1c23;
-      border-bottom: 2px solid #333;
-    }
-    #controls {
-      width: 100%;
-      max-width: 500px;
-      display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
-      gap: 5px;
-      padding: 10px;
-      background: #1a1c23;
+    @media (max-height:420px) and (orientation:landscape) {
+      body { padding:4px; gap:4px; grid-template-columns:minmax(0,1fr) 128px; }
+      #ui { padding:5px 8px; } #controls { gap:4px; padding:4px; }
+      button { padding:8px 4px !important; font-size:14px !important; }
     }
     button {
       padding: 15px;
@@ -100,7 +69,7 @@
   </div>
 
   <div id="game-container">
-    <canvas id="gameCanvas" width="320" height="320"></canvas>
+    <canvas id="gameCanvas" width="480" height="320"></canvas>
     <div id="message">
       <h2 id="msg-title" style="margin:0 0 15px 0; color: #fff;">You Died</h2>
       <div class="msg-buttons" id="msg-actions"></div>
@@ -121,6 +90,8 @@
     const ctx = canvas.getContext('2d');
     
     const TILE_SIZE = 16;
+    const MAP_WIDTH = 30;
+    const MAP_HEIGHT = 20;
     const MAP_SIZE = 20;
 
     let saveData = { permanentGold: 0, bonusMaxHp: 0, bonusAtk: 0, highestDepth: 1 };
@@ -162,7 +133,7 @@
     }
 
     let maps = {
-      SANCTUM: { name: "Sanctum", walls: [], doors: [], enemy: null, loot: null, exit: null, bossDoor: null, npc: null, drops: [], altar: null, vault: null },
+      SANCTUM: { name: "The Haven", walls: [], doors: [], enemy: null, loot: null, exit: null, bossDoor: null, npc: null, drops: [], altar: null, vault: null, facilities: [] },
       HUB: { name: "Courtyard", walls: [], doors: [], enemy: null, loot: null, exit: null, bossDoor: null, npc: null, drops: [] },
       ROOM_1: { name: "Unknown Room", walls: [], doors: [], enemy: null, loot: null, npc: null, offeringTree: null, drops: [] },
       ROOM_2: { name: "Unknown Room", walls: [], doors: [], enemy: null, loot: null, npc: null, offeringTree: null, drops: [] },
@@ -172,14 +143,25 @@
 
     // --- DUNGEON GENERATION ---
     function generateDungeon() {
-      // 1. Setup Sanctum
+      // The Haven: connected chambers form a true homebase.
       let sanctum = maps.SANCTUM;
-      sanctum.walls = []; sanctum.drops = [];
-      addWalls(sanctum, 0, 0, 19, 19);
-      addWalls(sanctum, 5, 5, 14, 5); addWalls(sanctum, 5, 5, 5, 14); addWalls(sanctum, 14, 5, 14, 14); 
-      sanctum.doors = [{ x: 10, y: 1, target: 'HUB', spawnX: 10, spawnY: 16, color: '#ff00ff', isDungeonEntry: true }];
-      sanctum.altar = { x: 7, y: 10, type: 'altar' };
-      sanctum.vault = { x: 13, y: 10, type: 'vault' };
+      sanctum.walls = []; sanctum.drops = []; sanctum.facilities = [];
+      addWalls(sanctum, 0, 0, MAP_WIDTH - 1, MAP_HEIGHT - 1);
+      for (let y = 2; y <= 17; y++) {
+        if (y !== 9 && y !== 10) sanctum.walls.push({ x: 9, y }, { x: 20, y });
+      }
+      for (let x = 2; x <= 27; x++) {
+        if (x !== 5 && x !== 15 && x !== 25) sanctum.walls.push({ x, y: 9 });
+      }
+      sanctum.doors = [{ x: 15, y: 2, target: 'HUB', spawnX: 10, spawnY: 16, color: '#bd75ff', isDungeonEntry: true }];
+      sanctum.altar = { x: 5, y: 5, type: 'altar' };
+      sanctum.vault = { x: 25, y: 5, type: 'vault' };
+      sanctum.facilities = [
+        { x: 5, y: 14, type: 'training', name: 'Training Grounds', color: '#d49a54' },
+        { x: 15, y: 5, type: 'armory', name: 'Armory', color: '#aab7c8' },
+        { x: 15, y: 14, type: 'forge', name: "Artisan's Workshop", color: '#ef884b' },
+        { x: 25, y: 14, type: 'runes', name: 'Rune Chamber', color: '#8b83e6' }
+      ];
 
       // 2. Setup HUB (Courtyard)
       let hub = maps.HUB;
@@ -208,7 +190,7 @@
         { x: 3, y: 1, target: 'ROOM_1', spawnX: 10, spawnY: 16, color: '#ffaa00' },
         { x: 10, y: 1, target: 'ROOM_2', spawnX: 10, spawnY: 16, color: '#ff00ff' },
         { x: 17, y: 1, target: 'ROOM_3', spawnX: 10, spawnY: 16, color: '#00ff00' },
-        { x: 10, y: 18, target: 'SANCTUM', spawnX: 10, spawnY: 2, color: '#00ffff' }
+        { x: 10, y: 18, target: 'SANCTUM', spawnX: 15, spawnY: 3, color: '#00ffff' }
       ];
       
       hub.bossDoor = { x: 18, y: 18, target: 'BOSS_ROOM', spawnX: 10, spawnY: 17, color: '#00aaff' };
@@ -338,6 +320,22 @@
       ctx.beginPath(); ctx.arc(px + 8, py + 8, 2, 0, Math.PI * 2); ctx.fill();
     }
 
+    function drawFacility(f) {
+      const px = f.x * TILE_SIZE, py = f.y * TILE_SIZE;
+      ctx.fillStyle = '#252b36'; ctx.fillRect(px + 1, py + 2, 14, 13);
+      ctx.fillStyle = f.color; ctx.fillRect(px + 3, py + 4, 10, 8);
+      ctx.fillStyle = '#101319'; ctx.fillRect(px + 6, py + 6, 4, 4);
+      ctx.fillStyle = '#e7e0ca'; ctx.fillRect(px + 7, py + 1, 2, 2);
+    }
+    function showFacility(f) {
+      const copy = {
+        training: 'Training Grounds: weapon practice, skills and perks will be developed here.',
+        armory: 'Armory: armor and equipment management will be developed here.',
+        forge: "Artisan's Workshop: crafting and equipment improvement will be developed here.",
+        runes: 'Rune Chamber: magical modules and passive enhancements will be developed here.'
+      };
+      showMessage(copy[f.type] || f.name, 'ok');
+    }
     function drawStation(x, y, type) {
       const px = x * TILE_SIZE; const py = y * TILE_SIZE;
       if (type === 'altar') {
@@ -399,6 +397,7 @@
       if (map.offeringTree) drawTree(map.offeringTree.x, map.offeringTree.y);
       if (map.altar) drawStation(map.altar.x, map.altar.y, 'altar');
       if (map.vault) drawStation(map.vault.x, map.vault.y, 'vault');
+      if (map.facilities) map.facilities.forEach(drawFacility);
 
       if (map.enemy && map.enemy.alive) {
         if (map.enemy.type === 'goblin') drawGoblin(map.enemy.x, map.enemy.y);
@@ -442,7 +441,11 @@
 
       // --- SANCTUM INTERACTIONS ---
       if (map.altar && targetX === map.altar.x && targetY === map.altar.y) { showAltar(); return; }
-      if (map.vault && targetX === map.vault.x && targetY === map.vault.y) { showMessage(`Vault: You have ${player.gold} Gold.`, 'ok'); return; }
+      if (map.vault && targetX === map.vault.x && targetY === map.vault.y) { showMessage(`Treasury: You have ${player.gold} Gold.`, 'ok'); return; }
+      if (map.facilities) {
+        const f = map.facilities.find(f => f.x === targetX && f.y === targetY);
+        if (f) { showFacility(f); return; }
+      }
 
       // --- SHOP NPC ---
       if (map.npc && targetX === map.npc.x && targetY === map.npc.y) {
@@ -673,7 +676,7 @@
       generateDungeon(); 
       initPlayer(); 
       currentMap = 'SANCTUM'; 
-      player.x = 10; player.y = 16;
+      player.x = 15; player.y = 17;
       gameState = 'PLAYING'; 
       document.getElementById('message').style.display = 'none'; 
       draw();
@@ -693,7 +696,7 @@
     generateDungeon();
     initPlayer();
     currentMap = 'SANCTUM';
-    player.x = 10; player.y = 16;
+    player.x = 15; player.y = 17;
     draw();
   </script>
 </body>
