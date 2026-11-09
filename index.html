@@ -113,7 +113,7 @@
 
     function initPlayer() {
       player = { 
-        x: 10, y: 16, 
+        x: 15, y: 17, 
         hp: 12 + saveData.bonusMaxHp, 
         maxHp: 12 + saveData.bonusMaxHp, 
         atk: 3 + saveData.bonusAtk, 
@@ -246,7 +246,23 @@
     }
 
     function isWall(x, y) {
+      const width = currentMap === 'SANCTUM' ? MAP_WIDTH : MAP_SIZE;
+      if (x < 0 || y < 0 || x >= width || y >= MAP_HEIGHT) return true;
       return maps[currentMap].walls.some(w => w.x === x && w.y === y);
+    }
+
+    function isEnemyBlocked(x, y, map) {
+      if (isWall(x, y)) return true;
+      if (map.doors && map.doors.some(d => d.x === x && d.y === y)) return true;
+      if (map.bossDoor && map.bossDoor.x === x && map.bossDoor.y === y) return true;
+      if (map.exit && map.exit.x === x && map.exit.y === y) return true;
+      if (map.loot && map.loot.active && map.loot.x === x && map.loot.y === y) return true;
+      if (map.npc && map.npc.x === x && map.npc.y === y) return true;
+      if (map.offeringTree && map.offeringTree.x === x && map.offeringTree.y === y) return true;
+      if (map.altar && map.altar.x === x && map.altar.y === y) return true;
+      if (map.vault && map.vault.x === x && map.vault.y === y) return true;
+      if (map.facilities && map.facilities.some(f => f.x === x && f.y === y)) return true;
+      return false;
     }
 
     // --- DRAWING ---
@@ -494,6 +510,10 @@
 
       // --- BOSS ROOM EXIT (DESCEND) ---
       if (map.exit && targetX === map.exit.x && targetY === map.exit.y) {
+        if (map.enemy && map.enemy.alive) {
+          showMessage("The way forward is sealed. Defeat the guardian first.", 'ok');
+          return;
+        }
         currentDepth++;
         if (currentDepth > saveData.highestDepth) { saveData.highestDepth = currentDepth; }
         saveData.permanentGold = player.gold;
@@ -557,13 +577,13 @@
             if (Math.abs(dx) > Math.abs(dy)) moveX = Math.sign(dx); else moveY = Math.sign(dy);
             let nextX = map.enemy.x + moveX, nextY = map.enemy.y + moveY;
 
-            if (!isWall(nextX, nextY) && !(nextX === player.x && nextY === player.y)) {
+            if (!isEnemyBlocked(nextX, nextY, map) && !(nextX === player.x && nextY === player.y)) {
               map.enemy.x = nextX; map.enemy.y = nextY;
             } else {
               moveX = 0; moveY = 0;
               if (Math.abs(dy) > 0) moveY = Math.sign(dy);
               nextX = map.enemy.x + moveX; nextY = map.enemy.y + moveY;
-              if (!isWall(nextX, nextY) && !(nextX === player.x && nextY === player.y)) {
+              if (!isEnemyBlocked(nextX, nextY, map) && !(nextX === player.x && nextY === player.y)) {
                 map.enemy.x = nextX; map.enemy.y = nextY;
               }
             }
